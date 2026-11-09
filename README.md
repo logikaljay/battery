@@ -12,36 +12,63 @@ Linux MacBooks (`macsmc-battery`) and any other laptop whose driver exposes it
 ## Install
 
 ```bash
-./install.sh               # CLI + bar widget
-./install.sh --limit 80    # …and turn on an 80% limit that survives reboots
-./install.sh --cli-only    # just the CLI, no Omarchy widget
+curl -fsSL https://raw.githubusercontent.com/logikaljay/battery/main/install.sh | bash
 ```
 
-or `make install` / `make install-cli`.
+Pass options after `bash -s --`:
 
-The installer:
+```bash
+# also turn on an 80% limit that survives reboots
+curl -fsSL https://raw.githubusercontent.com/logikaljay/battery/main/install.sh | bash -s -- --limit 80
 
-1. Copies `battery` to `~/.local/bin` (set `PREFIX` to change it).
-2. Copies `widget/` to `~/.config/omarchy/plugins/battery.power`.
-3. Swaps it in for Omarchy's **Power** widget in the bar, keeping that
-   widget's settings (such as *show percentage*). Any earlier clone of the
-   Power widget, e.g. one made with `omarchy plugin clone omarchy.power`, is
-   disabled.
-4. Restarts the Omarchy shell so the new widget loads (`--no-restart` to skip).
+# just the CLI, no Omarchy widget
+curl -fsSL https://raw.githubusercontent.com/logikaljay/battery/main/install.sh | bash -s -- --cli-only
+```
 
-Run it again after editing anything here to reinstall.
+| Option | |
+|---|---|
+| `--limit <pct>` | Also set a charge limit and keep it at boot |
+| `--cli-only` | Install just the CLI |
+| `--no-restart` | Don't restart the Omarchy shell afterwards |
+| `--uninstall` | Remove everything and restore Omarchy's Power widget |
 
-Requirements: bash, `jq` (widget only), `sudo` or `pkexec` for changing the limit.
+`PREFIX` sets where the CLI goes (default `~/.local`) and `BATTERY_REF`
+picks a branch or tag to install (default `main`).
+
+From a clone, `./install.sh [options]` (or `make install`) installs the files
+in the checkout instead of downloading them. Run it again after editing to
+reinstall.
+
+### What the installer does
+
+1. Downloads the project from GitHub (or uses the checkout it runs from).
+   The CLI is a bash script, so the same file works on x86_64 and ARM.
+2. Copies `battery` to `~/.local/bin`.
+3. If Omarchy is installed, copies `widget/` to
+   `~/.config/omarchy/plugins/battery.power`.
+4. If the Omarchy shell is running, swaps the widget in for Omarchy's
+   **Power** widget in the bar, keeping that widget's settings (such as
+   *show percentage*), disables any earlier clone of the Power widget (e.g.
+   one made with `omarchy plugin clone omarchy.power`), and restarts the
+   shell. Run from a TTY or over SSH with no shell running, it installs the
+   widget and tells you to run `omarchy plugin enable battery.power` from the
+   desktop.
+
+Without Omarchy you get the CLI alone.
+
+Requirements: Linux, bash, `curl` and `tar` (for the download), `jq` (for the
+widget), and `sudo` or `pkexec` to change the limit.
 
 ## Uninstall
 
 ```bash
-./install.sh --uninstall   # or: make uninstall
+curl -fsSL https://raw.githubusercontent.com/logikaljay/battery/main/install.sh | bash -s -- --uninstall
 ```
 
-Removes the CLI and the widget and brings back Omarchy's own Power widget. The
-current limit stays until you reboot; if you saved one for boot, the
-installer prints the command that removes the boot rule.
+or `./install.sh --uninstall` / `make uninstall` from a clone. This removes the
+CLI and the widget and brings back Omarchy's own Power widget. The current
+limit stays until you reboot; if you saved one for boot, the installer prints
+the command that removes the boot rule.
 
 ## The bar widget
 
