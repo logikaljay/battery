@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+# battery — cap how far the laptop battery charges (like macOS's 80% limit).
+#
+# Works on any kernel driver that exposes charge_control_end_threshold
+# (Asahi's macsmc-battery, ThinkPads, many others). Writes need root; the
+# tool asks with sudo in a terminal and pkexec otherwise.
+
+set -euo pipefail
+
+VERSION="0.2.0"
+RULE_FILE="/etc/udev/rules.d/99-battery-charge-limit.rules"
+DEFAULT_LIMIT=80
+
+# ------------------------------------------------------------------ helpers
+
+if [[ -t 1 ]]; then
+  BOLD=$'\e[1m' DIM=$'\e[2m' GREEN=$'\e[32m' YELLOW=$'\e[33m' RED=$'\e[31m' RESET=$'\e[0m'
+else
+  BOLD="" DIM="" GREEN="" YELLOW="" RED="" RESET=""
+fi
+
+die() { echo "${RED}battery:${RESET} $*" >&2; exit 1; }
+
+# The first power supply that supports a charge limit, unless BATTERY_DEVICE names one.
+find_battery() {
+  if [[ -n ${BATTERY_DEVICE:-} ]]; then
+    [[ -e /sys/class/power_supply/$BATTERY_DEVICE/charge_control_end_threshold ]] \
+      || die "$BATTERY_DEVICE has no charge_control_end_threshold"
+    echo "/sys/class/power_supply/$BATTERY_DEVICE"
+    return
+  fi
+  local dev
+  for dev in /sys/class/power_supply/*; do
+    [[ -e $dev/charge_control_end_threshold ]] && { echo "$dev"; return; }
+  done
+  die "no battery with charge-limit support found (needs charge_control_end_threshold in sysfs)"
+}
+
+BAT=$(find_battery)
+BAT_NAME=$(basename "$BAT")
+
+read_attr() { cat "$BAT/$1" 2>/dev/null || echo "?"; }
+
+# Run a command as root: sudo when someone can type a password, pkexec otherwise.
+as_root() {
+  if [[ $EUID -eq 0 ]]; then
+    "$@"
+  elif [[ -t 0 ]] && command -v sudo >/dev/null; then
+    sudo "$@"
+  elif command -v pkexec >/dev/null; then
+    pkexec "$@"
+  else
+    die "need root: run with sudo"
+  fi
+}
+
+write_attr() {
+  printf '%s\n' "$2" | as_root tee "$BAT/$1" >/dev/null
+}
+
+validate_limit() {
+  [[ $1 =~ ^[0-9]+$ ]] && (( $1 >= 20 && $1 <= 100 )) || die "limit must be a number from 20 to 100 (got '$1')"
+}
+
+persisted_limit() {
+  [[ -f $RULE_FILE ]] || return 1
+  sed -n 's/.*ATTR{charge_control_end_threshold}="\([0-9]*\)".*/\1/p' "$RULE_FILE" | head -n1
+}
+
+# ----------------------------------------------------------------- commands
+
+cmd_status() {
+  local cap status end start online="" plugged saved
+  cap=$(read_attr capacity)
+  status=$(read_attr status)
+  end=$(read_attr charge_control_end_threshold)
+  start=$(read_attr charge_control_start_threshold)
+  for ac in /sys/class/power_supply/*; do
+    [[ $(cat "$ac/type" 2>/dev/null) == Mains ]] && online=$(cat "$ac/online" 2>/dev/null)
+  done
+  case $online in 1) plugged="plugged in" ;; 0) plugged="on battery" ;; *) plugged="power source unknown" ;; esac
+
+  echo "${BOLD}Battery${RESET}  ${cap}%  ${DIM}(${status}, ${plugged})${RESET}"
+  if [[ $end == 100 ]]; then
+    echo "${BOLD}Limit${RESET}    ${YELLOW}off${RESET} — charges to 100%"
+  else
+    echo "${BOLD}Limit${RESET}    ${GREEN}${end}%${RESET}  ${DIM}(resumes charging below ${start}%)${RESET}"
+  fi
+  if saved=$(persisted_limit); then
+    echo "${BOLD}Boot${RESET}     ${saved}%  ${DIM}(${RULE_FILE})${RESET}"
+  else
+    echo "${BOLD}Boot${RESET}     ${DIM}not saved — resets to 100% on reboot${RESET}"
+  fi
+  echo "${DIM}Device   ${BAT_NAME}${RESET}"
+}
+
+cmd_set() {
+  local want=$1 got start
+  validate_limit "$want"
+  write_attr charge_control_end_threshold "$want"
+  got=$(read_attr charge_control_end_threshold)
+  start=$(read_attr charge_control_start_threshold)
+  if [[ $got == 100 ]]; then
+    echo "Limit off — charging to 100%."
+  else
+    echo "Charging stops at ${GREEN}${got}%${RESET} and resumes below ${start}%."
+  fi
+  # Some firmware (Apple's SMC) supports only fixed steps and rounds the request.
+  [[ $got == "$want" ]] || echo "${YELLOW}Note:${RESET} asked for ${want}%, firmware accepted ${got}%."
+}
+
+cmd_persist() {
+  local limit=${1:-$(read_attr charge_control_end_threshold)}
+  validate_limit "$limit"
+  printf '# Written by battery(1): cap charging at %s%%.\nSUBSYSTEM=="power_supply", KERNEL=="%s", ATTR{charge_control_end_threshold}="%s"\n' \
+    "$limit" "$BAT_NAME" "$limit" | as_root tee "$RULE_FILE" >/dev/null
+  as_root udevadm control --reload
+  echo "Saved: ${GREEN}${limit}%${RESET} will be applied at every boot."
+  [[ $(read_attr charge_control_end_threshold) == "$limit" ]] || cmd_set "$limit"
+}
+
+# Set the limit now and keep it at boot: what a settings toggle means.
+# 100 means "no limit", so it lifts the cap and drops the boot rule.
+cmd_apply() {
+  local limit=$1
+  validate_limit "$limit"
+  if [[ $limit == 100 ]]; then
+    cmd_set 100
+    [[ -f $RULE_FILE ]] && cmd_unpersist >/dev/null
+    echo "Boot rule removed."
+  else
+    cmd_persist "$limit"
+  fi
+}
+
+# Tab-separated key/value lines for scripts and the bar widget.
+cmd_status_shell() {
+  local saved
+  saved=$(persisted_limit || true)
+  printf 'device\t%s\n' "$BAT_NAME"
+  printf 'capacity\t%s\n' "$(read_attr capacity)"
+  printf 'status\t%s\n' "$(read_attr status)"
+  printf 'end\t%s\n' "$(read_attr charge_control_end_threshold)"
+  printf 'start\t%s\n' "$(read_attr charge_control_start_threshold)"
+  printf 'persisted\t%s\n' "${saved:-none}"
+}
+
+cmd_unpersist() {
+  if [[ -f $RULE_FILE ]]; then
+    as_root rm -f "$RULE_FILE"
+    as_root udevadm control --reload
+    echo "Boot rule removed. The current limit stays until reboot (use 'battery off' to lift it now)."
+  else
+    echo "No boot rule installed."
+  fi
+}
+
+usage() {
+  cat <<EOF
+${BOLD}battery${RESET} — limit how far the battery charges
+
+${BOLD}Usage${RESET}
+  battery                 Show charge level and current limit
+  battery on              Limit charging to ${DEFAULT_LIMIT}%
+  battery off             Charge to 100%
+  battery set <percent>   Limit charging to <percent> (20–100)
+  battery full            Charge to 100% once; a saved boot limit returns after reboot
+  battery persist [pct]   Apply the limit at every boot (default: the current limit)
+  battery unpersist       Stop applying a limit at boot
+  battery apply <percent> Set the limit and keep it at boot (100 lifts it everywhere)
+  battery status --shell  Machine-readable status (tab-separated)
+
+${BOLD}Environment${RESET}
+  BATTERY_DEVICE          Power supply to use (default: first one with a charge limit)
+
+Apple Silicon firmware supports only an 80% cap, so other values may be rounded.
+EOF
+}
+
+# Without a terminal (a bar widget, a keybinding) sudo cannot prompt, so
+# re-run the whole command once under pkexec: one polkit prompt, not one per write.
+case ${1:-status} in
+  on|off|full|set|limit|persist|save|unpersist|unsave|apply|[0-9]*)
+    if [[ $EUID -ne 0 && ! -t 0 ]] && command -v pkexec >/dev/null; then
+      exec pkexec "$(realpath "$0")" "$@"
+    fi ;;
+esac
+
+case ${1:-status} in
+  status|s)        [[ ${2:-} == --shell ]] && cmd_status_shell || cmd_status ;;
+  apply)           [[ $# -ge 2 ]] || die "usage: battery apply <percent>"; cmd_apply "$2" ;;
+  on)              cmd_set "$DEFAULT_LIMIT" ;;
+  off|full)        cmd_set 100 ;;
+  set|limit)       [[ $# -ge 2 ]] || die "usage: battery set <percent>"; cmd_set "$2" ;;
+  persist|save)    cmd_persist "${2:-}" ;;
+  unpersist|unsave) cmd_unpersist ;;
+  -h|--help|help)  usage ;;
+  -v|--version)    echo "battery $VERSION" ;;
+  [0-9]*)          cmd_set "$1" ;;
+  *)               usage >&2; exit 1 ;;
+esac

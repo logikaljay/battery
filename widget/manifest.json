@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "battery.power",
+  "name": "Power + Charge Limit",
+  "version": "1.0.0",
+  "author": "battery",
+  "description": "Omarchy's Power widget with a battery charge-limit control (80% / 100%)",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Power + Charge Limit",
+    "description": "Battery, charge limit, power profile, and system stats",
+    "category": "System",
+    "allowMultiple": false
+  },
+  "omarchy": {
+    "clonedFrom": "omarchy.power"
+  }
+}
