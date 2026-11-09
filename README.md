@@ -124,5 +124,14 @@ widget/        Omarchy bar widget: a clone of omarchy.power with the
                charge-limit section (Panel.qml); the installer writes the
                CLI's path into it
 install.sh     install / uninstall
+LICENSE        MIT
 Makefile       make install | install-cli | uninstall
 ```
+
+## License
+
+[MIT](LICENSE) © Jay Baker.
+
+`widget/` is adapted from the Power widget in
+[Omarchy](https://github.com/basecamp/omarchy), which is also MIT licensed;
+those parts remain under Omarchy's copyright and license.
